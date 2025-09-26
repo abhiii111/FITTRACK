@@ -3,218 +3,756 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Productive Time Manager</title>
+    <title>Advanced Fitness Tracker & AI Coach</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts for Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, query, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables provided by the environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db, auth, userId;
+
+        /**
+         * Initializes Firebase and authenticates the user.
+         */
+        async function initializeFirebase() {
+            if (!firebaseConfig) {
+                console.error("Firebase config is missing. Cannot initialize database.");
+                return;
+            }
+
+            setLogLevel('Debug');
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+
+            try {
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                    console.log("Signed in with custom token.");
+                } else {
+                    await signInAnonymously(auth);
+                    console.log("Signed in anonymously.");
+                }
+
+                // Wait for auth state to be confirmed
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
+                        console.log("Auth State Changed. User ID:", userId);
+                        // Start listening to data once authenticated
+                        window.setupDataListeners(db, userId, appId);
+                    } else {
+                        // This case should ideally not happen if signInWithCustomToken or signInAnonymously succeeds
+                        console.error("User is not signed in.");
+                        userId = crypto.randomUUID(); // Fallback
+                        document.getElementById('user-id-display').textContent = `User ID (Anon): ${userId}`;
+                    }
+                });
+
+            } catch (error) {
+                console.error("Firebase Authentication Error:", error);
+            }
+        }
+
+        // Expose Firebase objects and functions globally for access from main script
+        window.initializeFirebase = initializeFirebase;
+        window.getFirestore = getFirestore;
+        window.doc = doc;
+        window.setDoc = setDoc;
+        window.onSnapshot = onSnapshot;
+        window.collection = collection;
+        window.query = query;
+        window.serverTimestamp = serverTimestamp;
+
+    </script>
     <style>
-        :root {
-            --primary-color: #4A90E2;
-            --secondary-color: #E2E2E2;
-            --background-color: #F8F9FA;
-            --text-color: #333;
-            --form-bg-color: #FFF;
-        }
-
         body {
-            font-family: Arial, sans-serif;
-            background-color: var(--background-color);
-            color: var(--text-color);
-            margin: 0;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
+            font-family: 'Inter', sans-serif;
+            background-color: #0d1117; /* Dark background */
+        }
+        /* Custom scrollbar for better look on dark mode */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #161b22;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #238636;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #2ea043;
         }
 
-        h1, h2 {
-            color: var(--primary-color);
-            text-align: center;
+        .tracker-card {
+            background-color: #161b22; /* Slightly lighter dark background */
+            border: 1px solid #30363d;
         }
 
-        .container {
-            max-width: 800px;
-            width: 100%;
-            background-color: var(--form-bg-color);
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        .tab-button.active {
+            border-bottom: 3px solid #38bdf8; /* Sky blue underline */
+            color: #38bdf8;
+            font-weight: 600;
         }
 
-        .form-group {
-            margin-bottom: 20px;
+        .progress-bar-bg {
+            background-color: #30363d;
         }
-
-        label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: bold;
+        .progress-bar-fill-water {
+            background-color: #38bdf8;
+            transition: width 0.5s ease;
         }
-
-        input[type="date"], textarea {
-            width: 100%;
-            padding: 12px;
-            border: 1px solid var(--secondary-color);
-            border-radius: 6px;
-            box-sizing: border-box;
-            font-size: 16px;
+        .progress-bar-fill-calories {
+            background-color: #f87171; /* Red for high priority */
+            transition: width 0.5s ease;
         }
-
-        textarea {
-            min-height: 100px;
-            resize: vertical;
-        }
-
-        button {
-            width: 100%;
-            padding: 15px;
-            border: none;
-            background-color: var(--primary-color);
-            color: white;
-            font-size: 18px;
-            font-weight: bold;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: background-color 0.3s ease;
-        }
-
-        button:hover {
-            background-color: #3A7BBF;
-        }
-
-        #chart-container {
-            margin-top: 40px;
-            width: 100%;
-            display: none; /* Initially hidden, will show on click */
+        .progress-bar-fill-workouts {
+            background-color: #4ade80; /* Green for success */
+            transition: width 0.5s ease;
         }
     </style>
 </head>
-<body>
+<body class="min-h-screen text-gray-100 p-4 md:p-8">
 
-    <div class="container">
-        <h1>Productive Time Manager 🚀</h1>
-        <p>Log your activities to get a clear overview of your progress.</p>
+    <!-- Top Bar & User ID Display -->
+    <header class="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center">
+        <h1 class="text-4xl font-extrabold text-white mb-2 md:mb-0">
+            <span class="text-teal-400">FIT</span>TRACK
+        </h1>
+        <div id="user-id-display" class="text-xs text-gray-500 bg-gray-800 p-2 rounded-lg">
+            Initializing User...
+        </div>
+    </header>
 
-        <form id="progress-form">
-            <div class="form-group">
-                <label for="date">Date:</label>
-                <input type="date" id="date" name="date" required>
-            </div>
-
-            <div class="form-group">
-                <label for="study">What I Study in College:</label>
-                <textarea id="study" name="study" placeholder="e.g., Attended lectures for Differential Equations, worked on a project for CS101..."></textarea>
-            </div>
-
-            <div class="form-group">
-                <label for="afterCollege">What I Do After College (Personal Time):</label>
-                <textarea id="afterCollege" name="afterCollege" placeholder="e.g., Read a book for 30 minutes, watched a documentary, hung out with friends..."></textarea>
-            </div>
-
-            <div class="form-group">
-                <label for="physicalStrength">What I Do for Physical Strength:</label>
-                <textarea id="physicalStrength" name="physicalStrength" placeholder="e.g., Went for a 5k run, did an hour of weight training, practiced yoga..."></textarea>
-            </div>
-
-            <div class="form-group">
-                <label for="productive">What I Do Productively:</label>
-                <textarea id="productive" name="productive" placeholder="e.g., Completed a certificate course on Coursera, wrote code for my personal project..."></textarea>
-            </div>
-
-            <button type="submit">Log My Day</button>
-        </form>
+    <!-- Navigation Tabs -->
+    <div class="flex flex-wrap border-b border-gray-700 mb-6 sticky top-0 bg-[#0d1117] z-20">
+        <button class="tab-button p-3 mx-2 text-gray-400 transition duration-150 active" data-tab="dashboard">Dashboard</button>
+        <button class="tab-button p-3 mx-2 text-gray-400 transition duration-150" data-tab="diet">Diet</button>
+        <button class="tab-button p-3 mx-2 text-gray-400 transition duration-150" data-tab="workout">Workouts</button>
+        <button class="tab-button p-3 mx-2 text-gray-400 transition duration-150" data-tab="water">Water</button>
+        <button class="tab-button p-3 mx-2 text-gray-400 transition duration-150" data-tab="ai-coach">AI Coach (Gemini)</button>
     </div>
 
-    <div class="container" id="chart-container">
-        <h2>Your Monthly Progress 📈</h2>
-        <p>This graph will show your progress after logging your activities for a month.</p>
-        <canvas id="progressChart"></canvas>
+    <!-- MAIN CONTENT AREA -->
+    <div id="content-area" class="space-y-8">
+
+        <!-- 1. DASHBOARD -->
+        <div id="dashboard" class="tab-content active grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+            <!-- Summary Card -->
+            <div class="lg:col-span-2 tracker-card p-6 rounded-xl shadow-lg">
+                <h2 class="text-2xl font-bold mb-4 text-teal-300">Today's Summary</h2>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <!-- Calorie Goal -->
+                    <div class="p-4 bg-gray-800 rounded-lg shadow-inner">
+                        <p class="text-sm text-gray-400 mb-1">Calories Remaining</p>
+                        <p class="text-3xl font-bold text-red-400">
+                            <span id="display-calories-remaining">2000</span>
+                        </p>
+                        <div class="h-2 progress-bar-bg rounded-full mt-2"><div id="progress-calories" class="h-2 progress-bar-fill-calories rounded-full" style="width: 0%;"></div></div>
+                    </div>
+                    <!-- Water Goal -->
+                    <div class="p-4 bg-gray-800 rounded-lg shadow-inner">
+                        <p class="text-sm text-gray-400 mb-1">Water Intake</p>
+                        <p class="text-3xl font-bold text-blue-400">
+                            <span id="display-water-intake">0</span> ml
+                        </p>
+                        <div class="h-2 progress-bar-bg rounded-full mt-2"><div id="progress-water" class="h-2 progress-bar-fill-water rounded-full" style="width: 0%;"></div></div>
+                    </div>
+                    <!-- Workouts -->
+                    <div class="p-4 bg-gray-800 rounded-lg shadow-inner">
+                        <p class="text-sm text-gray-400 mb-1">Workouts Logged</p>
+                        <p class="text-3xl font-bold text-green-400" id="display-workouts-count">0</p>
+                        <p class="text-sm text-gray-400 mt-2">Total Duration: <span id="display-workouts-duration">0</span> min</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Diet Log Preview -->
+            <div class="tracker-card p-6 rounded-xl shadow-lg">
+                <h2 class="text-xl font-bold mb-3">Recent Meals</h2>
+                <ul id="diet-log-preview" class="space-y-2 text-sm max-h-40 overflow-y-auto">
+                    <li class="text-gray-500">Log meals in the Diet tab!</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- 2. DIET TRACKING -->
+        <div id="diet" class="tab-content hidden space-y-6">
+            <h2 class="text-3xl font-bold text-teal-300">Diet Measurement</h2>
+
+            <!-- Calorie Goal Setup -->
+            <div class="tracker-card p-6 rounded-xl">
+                <h3 class="text-xl font-semibold mb-3">Daily Calorie Goal</h3>
+                <div class="flex space-x-3 items-center">
+                    <input type="number" id="calorie-goal-input" placeholder="e.g., 2000" class="flex-grow bg-gray-800 text-white border border-gray-700 p-2 rounded-lg focus:ring-teal-500 focus:border-teal-500">
+                    <button id="set-calorie-goal-btn" class="bg-teal-500 hover:bg-teal-600 text-white font-semibold py-2 px-4 rounded-lg transition duration-200">Set Goal</button>
+                </div>
+            </div>
+
+            <!-- Add Meal Form -->
+            <div class="tracker-card p-6 rounded-xl">
+                <h3 class="text-xl font-semibold mb-3">Log a Meal or Food Item</h3>
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <input type="text" id="diet-item-name" placeholder="Item Name (e.g., Apple, Lunch)" class="md:col-span-2 bg-gray-800 text-white border border-gray-700 p-2 rounded-lg">
+                    <input type="number" id="diet-item-calories" placeholder="Calories" class="bg-gray-800 text-white border border-gray-700 p-2 rounded-lg">
+                    <button id="log-diet-btn" class="bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-lg transition duration-200">Log Diet</button>
+                </div>
+            </div>
+
+            <!-- Diet Log List -->
+            <div class="tracker-card p-6 rounded-xl">
+                <h3 class="text-xl font-semibold mb-3">Diet Log for Today</h3>
+                <ul id="diet-log-list" class="space-y-3">
+                    <li class="text-gray-500">No diet entries yet.</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- 3. WORKOUT TRACKING -->
+        <div id="workout" class="tab-content hidden space-y-6">
+            <h2 class="text-3xl font-bold text-teal-300">Workout Tracking</h2>
+
+            <!-- Add Workout Form -->
+            <div class="tracker-card p-6 rounded-xl">
+                <h3 class="text-xl font-semibold mb-3">Log a Workout Session</h3>
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <input type="text" id="workout-type" placeholder="Type (e.g., Running, Weightlifting)" class="md:col-span-2 bg-gray-800 text-white border border-gray-700 p-2 rounded-lg">
+                    <input type="number" id="workout-duration" placeholder="Duration (min)" class="bg-gray-800 text-white border border-gray-700 p-2 rounded-lg">
+                    <input type="number" id="workout-calories" placeholder="Calories Burned" class="bg-gray-800 text-white border border-gray-700 p-2 rounded-lg hidden md:block">
+                    <button id="log-workout-btn" class="bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded-lg transition duration-200 md:col-span-1">Log Workout</button>
+                </div>
+            </div>
+
+            <!-- Workout Log List -->
+            <div class="tracker-card p-6 rounded-xl">
+                <h3 class="text-xl font-semibold mb-3">Workout Log for Today</h3>
+                <ul id="workout-log-list" class="space-y-3">
+                    <li class="text-gray-500">No workout entries yet.</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- 4. WATER INTAKE -->
+        <div id="water" class="tab-content hidden space-y-6">
+            <h2 class="text-3xl font-bold text-teal-300">Water Intake</h2>
+
+            <!-- Water Goal Setup -->
+            <div class="tracker-card p-6 rounded-xl">
+                <h3 class="text-xl font-semibold mb-3">Daily Water Goal (ml)</h3>
+                <div class="flex space-x-3 items-center">
+                    <input type="number" id="water-goal-input" placeholder="e.g., 3000" class="flex-grow bg-gray-800 text-white border border-gray-700 p-2 rounded-lg focus:ring-blue-500 focus:border-blue-500">
+                    <button id="set-water-goal-btn" class="bg-teal-500 hover:bg-teal-600 text-white font-semibold py-2 px-4 rounded-lg transition duration-200">Set Goal</button>
+                </div>
+            </div>
+
+            <!-- Water Intake Control -->
+            <div class="tracker-card p-6 rounded-xl text-center">
+                <h3 class="text-xl font-semibold mb-3">Current Intake: <span id="water-current-display" class="text-blue-400 font-bold">0 ml</span></h3>
+                <p class="text-sm text-gray-400 mb-4">Goal: <span id="water-goal-display">3000</span> ml</p>
+                <div class="flex justify-center space-x-4">
+                    <button data-amount="250" class="add-water-btn bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded-full transition duration-200">+ 250 ml</button>
+                    <button data-amount="500" class="add-water-btn bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded-full transition duration-200">+ 500 ml</button>
+                    <button id="reset-water-btn" class="bg-gray-600 hover:bg-gray-700 text-white font-semibold py-2 px-4 rounded-full transition duration-200">Reset</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 5. AI COACH (GEMINI INTEGRATION) -->
+        <div id="ai-coach" class="tab-content hidden space-y-6">
+            <h2 class="text-3xl font-bold text-teal-300">AI Coach (Powered by Gemini)</h2>
+
+            <!-- AI Chat Interface -->
+            <div class="tracker-card p-6 rounded-xl">
+                <h3 class="text-xl font-semibold mb-4">Ask about diet, workout plans, or motivation!</h3>
+                <!-- Chat History -->
+                <div id="chat-history" class="h-96 overflow-y-auto space-y-4 p-3 bg-gray-800 rounded-lg mb-4">
+                    <div class="text-center text-gray-500 p-4">
+                        <p>Hello! I'm your personalized Fitness AI Coach. Ask me anything, like: "What is a good post-workout meal?" or "How can I improve my deadlift form?"</p>
+                    </div>
+                </div>
+
+                <!-- Input Field -->
+                <div class="flex space-x-3">
+                    <input type="text" id="ai-query-input" placeholder="Your question..." class="flex-grow bg-gray-900 text-white border border-gray-700 p-3 rounded-lg focus:ring-teal-500 focus:border-teal-500">
+                    <button id="send-ai-query-btn" class="bg-teal-500 hover:bg-teal-600 text-white font-semibold py-3 px-6 rounded-lg transition duration-200">Send</button>
+                </div>
+            </div>
+        </div>
+
+    </div> <!-- End of content-area -->
+
+    <!-- Error/Confirmation Modal -->
+    <div id="message-modal" class="fixed inset-0 bg-black bg-opacity-75 hidden flex items-center justify-center z-50">
+        <div class="bg-gray-800 p-6 rounded-xl shadow-2xl max-w-sm w-full text-center border-2 border-red-500">
+            <p id="modal-text" class="text-lg font-semibold text-white mb-4"></p>
+            <button id="close-modal-btn" class="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg">Close</button>
+        </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- JavaScript Application Logic -->
+    <script type="module">
+        // Import necessary components that were exposed globally
+        const { initializeFirebase, getFirestore, doc, setDoc, onSnapshot, collection, query, serverTimestamp } = window;
 
-    <script>
-        const form = document.getElementById('progress-form');
-        const chartContainer = document.getElementById('chart-container');
-        const ctx = document.getElementById('progressChart').getContext('2d');
-
-        // This is a placeholder for your monthly data.
-        // In a real app, this data would come from a server.
-        const monthlyData = {
-            labels: ['Week 1', 'Week 2', 'Week 3', 'Week 4'],
-            datasets: [
-                {
-                    label: 'Academic Study (Hours)',
-                    data: [15, 18, 20, 16],
-                    backgroundColor: 'rgba(74, 144, 226, 0.7)',
-                    borderColor: 'rgba(74, 144, 226, 1)',
-                    borderWidth: 1
-                },
-                {
-                    label: 'Physical Activity (Hours)',
-                    data: [3, 4, 3.5, 5],
-                    backgroundColor: 'rgba(255, 159, 64, 0.7)',
-                    borderColor: 'rgba(255, 159, 64, 1)',
-                    borderWidth: 1
-                },
-                {
-                    label: 'Productive Activity (Hours)',
-                    data: [8, 10, 9, 12],
-                    backgroundColor: 'rgba(153, 102, 255, 0.7)',
-                    borderColor: 'rgba(153, 102, 255, 1)',
-                    borderWidth: 1
-                },
-                {
-                    label: 'Personal Time (Hours)',
-                    data: [10, 8, 7, 9],
-                    backgroundColor: 'rgba(75, 192, 192, 0.7)',
-                    borderColor: 'rgba(75, 192, 192, 1)',
-                    borderWidth: 1
-                }
-            ]
+        // --- GLOBAL STATE ---
+        let db, currentUserId, currentAppId;
+        let todayData = {
+            calorieGoal: 2000,
+            waterGoal: 3000,
+            dietEntries: [],
+            workoutEntries: [],
+            waterIntake: 0
         };
 
-        let myChart; // Variable to hold the chart instance
+        // --- UTILITY FUNCTIONS ---
 
-        function renderMonthlyGraph() {
-            // Destroy the previous chart instance if it exists to prevent overlap
-            if (myChart) {
-                myChart.destroy();
+        /**
+         * Gets today's date in YYYY-MM-DD format for document naming.
+         */
+        const getTodayDateKey = () => {
+            return new Date().toISOString().split('T')[0];
+        };
+
+        /**
+         * Shows the custom modal with a message.
+         * @param {string} message - The message to display.
+         * @param {string} [type='error'] - Type of message (currently only 'error' border color).
+         */
+        const showModal = (message) => {
+            const modal = document.getElementById('message-modal');
+            document.getElementById('modal-text').textContent = message;
+            modal.classList.remove('hidden');
+            modal.querySelector('div').classList.remove('border-red-500', 'border-green-500');
+            modal.querySelector('div').classList.add('border-red-500');
+        };
+
+        // --- UI RENDER FUNCTIONS ---
+
+        /**
+         * Renders all data to the dashboard and tracking lists.
+         */
+        const renderUI = () => {
+            const { calorieGoal, waterGoal, dietEntries, workoutEntries, waterIntake } = todayData;
+
+            // 1. Dashboard Updates
+            const totalCaloriesConsumed = dietEntries.reduce((sum, entry) => sum + (entry.calories || 0), 0);
+            const totalDuration = workoutEntries.reduce((sum, entry) => sum + (entry.duration || 0), 0);
+            const totalCaloriesBurned = workoutEntries.reduce((sum, entry) => sum + (entry.caloriesBurned || 0), 0);
+            const netCalories = calorieGoal - totalCaloriesConsumed + totalCaloriesBurned;
+
+            document.getElementById('display-calories-remaining').textContent = Math.max(0, netCalories);
+            document.getElementById('display-water-intake').textContent = waterIntake.toLocaleString();
+            document.getElementById('display-workouts-count').textContent = workoutEntries.length;
+            document.getElementById('display-workouts-duration').textContent = totalDuration;
+
+            // Progress Bars
+            const waterPercent = Math.min(100, (waterIntake / waterGoal) * 100);
+            const caloriePercent = Math.min(100, (totalCaloriesConsumed / calorieGoal) * 100);
+            document.getElementById('progress-water').style.width = `${waterPercent}%`;
+            document.getElementById('progress-calories').style.width = `${caloriePercent}%`;
+
+            // 2. Water Tab Updates
+            document.getElementById('water-current-display').textContent = `${waterIntake.toLocaleString()} ml`;
+            document.getElementById('water-goal-display').textContent = waterGoal.toLocaleString();
+            document.getElementById('water-goal-input').value = waterGoal;
+
+            // 3. Diet Tab Updates
+            document.getElementById('calorie-goal-input').value = calorieGoal;
+            const dietList = document.getElementById('diet-log-list');
+            const dietPreview = document.getElementById('diet-log-preview');
+            dietList.innerHTML = '';
+            dietPreview.innerHTML = '';
+            if (dietEntries.length === 0) {
+                dietList.innerHTML = `<li class="text-gray-500">No diet entries yet.</li>`;
+                dietPreview.innerHTML = `<li class="text-gray-500">Log meals in the Diet tab!</li>`;
+            } else {
+                dietEntries.slice().reverse().forEach(entry => {
+                    const li = document.createElement('li');
+                    li.className = 'flex justify-between p-3 bg-gray-800 rounded-lg';
+                    li.innerHTML = `
+                        <span>${entry.name}</span>
+                        <span class="text-red-400 font-semibold">${entry.calories} kcal</span>
+                    `;
+                    dietList.appendChild(li);
+
+                    const liPreview = document.createElement('li');
+                    liPreview.className = 'flex justify-between items-center text-gray-300 border-b border-gray-700 pb-1';
+                    liPreview.innerHTML = `
+                        <span class="truncate">${entry.name}</span>
+                        <span class="text-xs text-red-400">${entry.calories} kcal</span>
+                    `;
+                    dietPreview.appendChild(liPreview);
+                });
             }
 
-            myChart = new Chart(ctx, {
-                type: 'bar',
-                data: monthlyData,
-                options: {
-                    responsive: true,
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            title: {
-                                display: true,
-                                text: 'Hours'
-                            }
-                        }
-                    }
+            // 4. Workout Tab Updates
+            const workoutList = document.getElementById('workout-log-list');
+            workoutList.innerHTML = '';
+            if (workoutEntries.length === 0) {
+                workoutList.innerHTML = `<li class="text-gray-500">No workout entries yet.</li>`;
+            } else {
+                workoutEntries.slice().reverse().forEach(entry => {
+                    const li = document.createElement('li');
+                    li.className = 'flex justify-between p-3 bg-gray-800 rounded-lg';
+                    li.innerHTML = `
+                        <span>${entry.type}</span>
+                        <span class="text-green-400 font-semibold">${entry.duration} min / ${entry.caloriesBurned} kcal</span>
+                    `;
+                    workoutList.appendChild(li);
+                });
+            }
+        };
+
+        // --- FIREBASE DATA HANDLING ---
+
+        /**
+         * Saves the current daily data object to Firestore.
+         */
+        const saveDailyData = async () => {
+            if (!db || !currentUserId || !currentAppId) {
+                console.error("Database not initialized or user not logged in.");
+                showModal("Data save failed: Application not initialized correctly.");
+                return;
+            }
+
+            const docKey = getTodayDateKey();
+            const docRef = window.doc(db, `artifacts/${currentAppId}/users/${currentUserId}/fitness_data`, docKey);
+
+            try {
+                // Ensure all fields are correctly formatted before saving
+                const dataToSave = {
+                    date: docKey,
+                    calorieGoal: todayData.calorieGoal,
+                    waterGoal: todayData.waterGoal,
+                    dietEntries: todayData.dietEntries.map(e => ({ name: e.name, calories: e.calories })),
+                    workoutEntries: todayData.workoutEntries.map(e => ({ type: e.type, duration: e.duration, caloriesBurned: e.caloriesBurned })),
+                    waterIntake: todayData.waterIntake,
+                    updatedAt: serverTimestamp()
+                };
+
+                await setDoc(docRef, dataToSave, { merge: true });
+                console.log("Daily data saved successfully for:", docKey);
+            } catch (error) {
+                console.error("Error saving daily data:", error);
+                showModal(`Failed to save data: ${error.message}`);
+            }
+        };
+
+        /**
+         * Sets up real-time listener for today's data.
+         */
+        window.setupDataListeners = (firestoreDb, userId, appId) => {
+            db = firestoreDb;
+            currentUserId = userId;
+            currentAppId = appId;
+            const docKey = getTodayDateKey();
+            const docRef = window.doc(db, `artifacts/${currentAppId}/users/${currentUserId}/fitness_data`, docKey);
+
+            window.onSnapshot(docRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const fetchedData = docSnap.data();
+                    console.log("Fetched data:", fetchedData);
+                    // Update the global state with fetched data
+                    todayData.calorieGoal = fetchedData.calorieGoal || 2000;
+                    todayData.waterGoal = fetchedData.waterGoal || 3000;
+                    todayData.dietEntries = fetchedData.dietEntries || [];
+                    todayData.workoutEntries = fetchedData.workoutEntries || [];
+                    todayData.waterIntake = fetchedData.waterIntake || 0;
+                } else {
+                    console.log("No data found for today, using defaults and saving.");
+                    // Save defaults if no document exists
+                    saveDailyData();
                 }
+                // Always render UI after state update
+                renderUI();
+            }, (error) => {
+                console.error("Snapshot Listener Error:", error);
+                showModal(`Real-time data error: ${error.message}`);
+            });
+        };
+
+        // --- EVENT HANDLERS ---
+
+        /**
+         * Handles tab switching
+         */
+        const handleTabSwitch = (tabName) => {
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.add('hidden');
+            });
+            document.querySelectorAll('.tab-button').forEach(button => {
+                button.classList.remove('active');
             });
 
-            // Show the chart container
-            chartContainer.style.display = 'block';
+            document.getElementById(tabName).classList.remove('hidden');
+            document.querySelector(`.tab-button[data-tab="${tabName}"]`).classList.add('active');
+        };
+
+        /**
+         * Logs a diet entry.
+         */
+        const handleLogDiet = () => {
+            const name = document.getElementById('diet-item-name').value.trim();
+            const calories = parseInt(document.getElementById('diet-item-calories').value);
+
+            if (!name || isNaN(calories) || calories <= 0) {
+                showModal("Please enter a valid item name and calorie amount.");
+                return;
+            }
+
+            todayData.dietEntries.push({ name, calories, time: new Date().toLocaleTimeString() });
+            saveDailyData();
+
+            // Clear inputs
+            document.getElementById('diet-item-name').value = '';
+            document.getElementById('diet-item-calories').value = '';
+        };
+
+        /**
+         * Logs a workout entry.
+         */
+        const handleLogWorkout = () => {
+            const type = document.getElementById('workout-type').value.trim();
+            const duration = parseInt(document.getElementById('workout-duration').value);
+            // Calories burned can be estimated or manually entered. We use a simple default if not provided.
+            const caloriesBurned = parseInt(document.getElementById('workout-calories').value) || (duration * 8); // Simple estimation: 8 kcal/min
+
+            if (!type || isNaN(duration) || duration <= 0) {
+                showModal("Please enter a valid workout type and duration.");
+                return;
+            }
+
+            todayData.workoutEntries.push({ type, duration, caloriesBurned });
+            saveDailyData();
+
+            // Clear inputs
+            document.getElementById('workout-type').value = '';
+            document.getElementById('workout-duration').value = '';
+            document.getElementById('workout-calories').value = '';
+        };
+
+        /**
+         * Handles water intake actions (add or reset).
+         */
+        const handleWaterAction = (amount, reset = false) => {
+            if (reset) {
+                todayData.waterIntake = 0;
+            } else if (amount > 0) {
+                todayData.waterIntake += amount;
+            }
+            saveDailyData();
+        };
+
+        /**
+         * Sets the new calorie goal.
+         */
+        const handleSetCalorieGoal = () => {
+            const newGoal = parseInt(document.getElementById('calorie-goal-input').value);
+            if (!isNaN(newGoal) && newGoal > 500) {
+                todayData.calorieGoal = newGoal;
+                saveDailyData();
+            } else {
+                showModal("Please set a realistic calorie goal (above 500 kcal).");
+            }
+        };
+
+        /**
+         * Sets the new water goal.
+         */
+        const handleSetWaterGoal = () => {
+            const newGoal = parseInt(document.getElementById('water-goal-input').value);
+            if (!isNaN(newGoal) && newGoal > 500) {
+                todayData.waterGoal = newGoal;
+                saveDailyData();
+            } else {
+                showModal("Please set a realistic water goal (above 500 ml).");
+            }
+        };
+
+
+        // --- GEMINI AI COACH INTEGRATION ---
+
+        const API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent";
+        const API_KEY = ""; // Placeholder for the environment key
+
+        /**
+         * Adds a message bubble to the chat history.
+         * @param {string} text - The message content.
+         * @param {string} sender - 'user' or 'ai'.
+         * @param {Array<Object>} [sources=[]] - Optional array of source objects.
+         */
+        const addMessageToChat = (text, sender, sources = []) => {
+            const chatHistory = document.getElementById('chat-history');
+            const messageContainer = document.createElement('div');
+            messageContainer.className = `flex ${sender === 'user' ? 'justify-end' : 'justify-start'}`;
+
+            const bubble = document.createElement('div');
+            bubble.className = `max-w-xs md:max-w-md p-3 rounded-xl shadow-md text-sm ${
+                sender === 'user' ? 'bg-teal-600 text-white rounded-br-none' : 'bg-gray-700 text-gray-100 rounded-tl-none'
+            }`;
+            bubble.innerHTML = text.replace(/\n/g, '<br>'); // Preserve line breaks
+
+            messageContainer.appendChild(bubble);
+            chatHistory.appendChild(messageContainer);
+
+            // Add sources if available and from AI
+            if (sender === 'ai' && sources.length > 0) {
+                const sourceDiv = document.createElement('div');
+                sourceDiv.className = 'text-xs text-gray-400 mt-1 pl-2';
+                sourceDiv.innerHTML = `
+                    <span class="font-semibold text-gray-500">Sources:</span>
+                    ${sources.map((s, i) => `<a href="${s.uri}" target="_blank" class="text-blue-400 hover:underline mx-1">[${i + 1}]</a>`).join('')}
+                `;
+                messageContainer.appendChild(sourceDiv);
+            }
+
+            // Scroll to the bottom
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        };
+
+        /**
+         * Calls the Gemini API to get a fitness/diet response.
+         * @param {string} prompt - The user's query.
+         */
+        async function getAiResponse(prompt) {
+            const sendButton = document.getElementById('send-ai-query-btn');
+            const inputField = document.getElementById('ai-query-input');
+
+            sendButton.disabled = true;
+            sendButton.textContent = 'Thinking...';
+            inputField.disabled = true;
+
+            const systemPrompt = `You are a friendly, motivational, and highly knowledgeable personal fitness and diet AI coach. Provide concise, helpful, and science-backed advice. Use Google Search to find up-to-date information when relevant to the user's query. Do not start your response with 'As an AI...'`;
+
+            const payload = {
+                contents: [{ parts: [{ text: prompt }] }],
+                tools: [{ "google_search": {} }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+            };
+
+            const maxRetries = 3;
+            let delay = 1000;
+
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(`${API_URL}?key=${API_KEY}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (response.ok) {
+                        const result = await response.json();
+                        const candidate = result.candidates?.[0];
+
+                        if (candidate && candidate.content?.parts?.[0]?.text) {
+                            const text = candidate.content.parts[0].text;
+                            let sources = [];
+                            const groundingMetadata = candidate.groundingMetadata;
+
+                            if (groundingMetadata && groundingMetadata.groundingAttributions) {
+                                sources = groundingMetadata.groundingAttributions
+                                    .map(attribution => ({
+                                        uri: attribution.web?.uri,
+                                        title: attribution.web?.title,
+                                    }))
+                                    .filter(source => source.uri && source.title);
+                            }
+
+                            addMessageToChat(text, 'ai', sources);
+                        } else {
+                            addMessageToChat("I'm sorry, I couldn't generate a response. Please try again.", 'ai');
+                        }
+                        break; // Success, exit loop
+                    } else if (response.status === 429) {
+                        console.warn(`API Rate Limit exceeded. Retrying in ${delay / 1000}s...`);
+                        if (i < maxRetries - 1) {
+                            await new Promise(resolve => setTimeout(resolve, delay));
+                            delay *= 2; // Exponential backoff
+                        } else {
+                            throw new Error("API call failed after maximum retries.");
+                        }
+                    } else {
+                        throw new Error(`API returned status ${response.status}`);
+                    }
+                } catch (error) {
+                    console.error("Gemini API call failed:", error);
+                    addMessageToChat(`An error occurred: ${error.message}`, 'ai');
+                    break; // Non-retryable error or exhausted retries
+                }
+            }
+
+            sendButton.disabled = false;
+            sendButton.textContent = 'Send';
+            inputField.disabled = false;
+            inputField.focus();
         }
 
-        // Example: The graph will be rendered after a form submission.
-        // In a real-world app, you would retrieve and process the data first.
-        form.addEventListener('submit', (e) => {
-            e.preventDefault(); // Prevent the default form submission
+        /**
+         * Handles the AI query submission.
+         */
+        const handleAiQuery = () => {
+            const inputField = document.getElementById('ai-query-input');
+            const query = inputField.value.trim();
 
-            const formData = new FormData(form);
-            const data = Object.fromEntries(formData.entries());
+            if (query) {
+                addMessageToChat(query, 'user');
+                inputField.value = '';
+                getAiResponse(query);
+            }
+        };
 
-            console.log('Submitted Data:', data);
-            
-            // For this example, we simply show the chart
-            // In a real app, you would save this data to a database
-            // and then generate the graph based on the stored data
-            alert('Day logged successfully! Check the console for data.');
-            renderMonthlyGraph();
+        // --- INITIALIZATION ---
+
+        window.addEventListener('load', () => {
+            // 1. Initialize Firebase
+            initializeFirebase();
+
+            // 2. Setup UI event listeners
+            document.querySelectorAll('.tab-button').forEach(button => {
+                button.addEventListener('click', () => handleTabSwitch(button.dataset.tab));
+            });
+
+            document.getElementById('close-modal-btn').addEventListener('click', () => {
+                document.getElementById('message-modal').classList.add('hidden');
+            });
+
+            // Diet listeners
+            document.getElementById('log-diet-btn').addEventListener('click', handleLogDiet);
+            document.getElementById('set-calorie-goal-btn').addEventListener('click', handleSetCalorieGoal);
+
+            // Workout listeners
+            document.getElementById('log-workout-btn').addEventListener('click', handleLogWorkout);
+
+            // Water listeners
+            document.querySelectorAll('.add-water-btn').forEach(btn => {
+                btn.addEventListener('click', () => handleWaterAction(parseInt(btn.dataset.amount)));
+            });
+            document.getElementById('reset-water-btn').addEventListener('click', () => handleWaterAction(0, true));
+            document.getElementById('set-water-goal-btn').addEventListener('click', handleSetWaterGoal);
+
+            // AI Coach listeners
+            document.getElementById('send-ai-query-btn').addEventListener('click', handleAiQuery);
+            document.getElementById('ai-query-input').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') handleAiQuery();
+            });
+
+            // Initially render the UI with default state
+            renderUI();
         });
     </script>
 </body>
